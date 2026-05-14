@@ -372,7 +372,7 @@ function DashboardView({
                value={notes}
                onChange={(e) => setNotes(e.target.value)}
                placeholder="Cole ou digite aqui o mapa cirúrgico completo do plantão (ex: Salas, Horários, Cirurgias, Pacientes)..." 
-               className="w-full flex-1 min-h-[180px] p-4 text-xs bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-[#A855F7] focus:ring-1 focus:ring-[#A855F7] resize-none transition-shadow text-[#1A1A1A] placeholder:text-gray-400 font-medium font-mono leading-relaxed"
+               className="w-full flex-1 min-h-[320px] p-4 text-xs bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-[#A855F7] focus:ring-1 focus:ring-[#A855F7] resize-y transition-shadow text-[#1A1A1A] placeholder:text-gray-400 font-medium font-mono leading-relaxed"
              />
            </Card>
 
