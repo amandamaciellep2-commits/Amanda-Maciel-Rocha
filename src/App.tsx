@@ -32,7 +32,9 @@ import {
   LogOut,
   Printer,
   Shield,
-  Brain
+  Brain,
+  User,
+  Hospital
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -313,7 +315,7 @@ function DashboardView({
         image="https://images.unsplash.com/photo-1509803874385-db7c23652552?auto=format&fit=crop&q=80&w=2000" 
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 md:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
         <div className="col-span-2 bg-white p-6 rounded-2xl shadow-[0_4px_24px_rgb(0,0,0,0.04)] flex flex-col justify-between">
            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-4">Ciclos hoje</span>
            <div className="grid grid-cols-4 gap-2">
@@ -337,12 +339,6 @@ function DashboardView({
         </div>
         <CounterCard label="OPME verificada" initialValue={4} />
         <CounterCard label="Ópticas verificadas" initialValue={10} />
-        <PendenciasCard 
-          pendencias={pendencias} 
-          addPendencia={addPendencia} 
-          togglePendencia={togglePendencia} 
-          removePendencia={removePendencia} 
-        />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6 md:gap-8">
@@ -705,10 +701,18 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'forgot'>('login');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
+
+  // Expanded registration states & UX states
+  const [authFullName, setAuthFullName] = useState('');
+  const [authHospitalName, setAuthHospitalName] = useState('');
+  const [authRole, setAuthRole] = useState('Enfermeiro(a) CME');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showDBConfigInLock, setShowDBConfigInLock] = useState(false);
 
   // AI Insights states
   const [aiInsight, setAiInsight] = useState<string>('');
@@ -723,6 +727,7 @@ export default function App() {
   const [showSqlModal, setShowSqlModal] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [showCredentialsModal, setShowCredentialsModal] = useState(false);
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
 
   // Connection configurations
   const [supabaseUrlInput, setSupabaseUrlInput] = useState('');
@@ -847,7 +852,11 @@ export default function App() {
           setSupabaseErrorMsg('A tabela "plantao_cme" não existe no seu banco de dados.');
         } else {
           setSupabaseStatus('error');
-          setSupabaseErrorMsg(`Erro de Carregamento [${error.code || 'HTTP 400'}]: ${error.message}`);
+          if (error.message && (error.message.includes('Failed to fetch') || error.message.includes('fetch'))) {
+            setSupabaseErrorMsg('Sem conexão ou credenciais de banco de dados não configuradas. Para resolver, clique em "Conectar ao Supabase" na barra lateral esquerda ou no cabeçalho e insira as credenciais corretas do seu projeto no Supabase.');
+          } else {
+            setSupabaseErrorMsg(`Erro de Carregamento [${error.code || 'HTTP 400'}]: ${error.message}`);
+          }
         }
         return;
       }
@@ -911,9 +920,15 @@ export default function App() {
           }
         }
       }
-    } catch (err) {
+      setInitialLoadDone(true);
+    } catch (err: any) {
       console.error('Connection check failed:', err);
       setSupabaseStatus('error');
+      if (err?.message && (err.message.includes('Failed to fetch') || err.message.includes('fetch'))) {
+        setSupabaseErrorMsg('Sem conexão ou credenciais de banco de dados não configuradas. Por favor, clique no botão "Conectar ao Supabase" para inserir suas chaves corretas.');
+      } else {
+        setSupabaseErrorMsg(`Erro: ${err?.message || err}`);
+      }
     }
   };
 
@@ -1009,13 +1024,21 @@ export default function App() {
           );
         } else {
           setSupabaseStatus('error');
-          setSupabaseErrorMsg(`Erro [${lastError.code || 'HTTP 400'}]: ${lastError.message}. ${lastError.details || ''}`);
+          if (lastError.message && (lastError.message.includes('Failed to fetch') || lastError.message.includes('fetch'))) {
+            setSupabaseErrorMsg('Sem conexão ou credenciais de banco de dados não configuradas. Clique em "Conectar ao Supabase" para inserir suas chaves corretas.');
+          } else {
+            setSupabaseErrorMsg(`Erro [${lastError.code || 'HTTP 400'}]: ${lastError.message}. ${lastError.details || ''}`);
+          }
         }
       }
     } catch (err: any) {
       console.error('Failed to save to Supabase:', err);
       setSupabaseStatus('error');
-      setSupabaseErrorMsg(`Falha de Conexão: ${err?.message || err}`);
+      if (err?.message && (err.message.includes('Failed to fetch') || err.message.includes('fetch'))) {
+        setSupabaseErrorMsg('Sem conexão ou credenciais de banco de dados não configuradas. Por favor, clique no botão "Conectar ao Supabase" para inserir suas chaves.');
+      } else {
+        setSupabaseErrorMsg(`Falha de Conexão: ${err?.message || err}`);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1091,7 +1114,7 @@ export default function App() {
     }
   };
 
-  // Auth Submit signup / login
+  // Auth Submit signup / login / forgot
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -1106,10 +1129,29 @@ export default function App() {
     }
 
     try {
-      if (authMode === 'signup') {
+      if (authMode === 'forgot') {
+        const { error } = await client.auth.resetPasswordForEmail(authEmail.trim(), {
+          redirectTo: `${window.location.origin}/`,
+        });
+        if (error) throw error;
+        setAuthSuccessMsg("Instruções enviadas! Verifique seu e-mail para atualizar sua senha.");
+      } else if (authMode === 'signup') {
+        if (authPassword !== authConfirmPassword) {
+          setAuthError("As senhas digitadas não coincidem.");
+          setIsAuthLoading(false);
+          return;
+        }
+
         const { data, error } = await client.auth.signUp({
           email: authEmail.trim(),
           password: authPassword,
+          options: {
+            data: {
+              full_name: authFullName.trim(),
+              hospital_name: authHospitalName.trim(),
+              role: authRole
+            }
+          }
         });
         if (error) throw error;
 
@@ -1244,6 +1286,17 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
     setupAuthListener();
   }, []);
 
+  // Debounced auto-save to background-sync data to Supabase
+  useEffect(() => {
+    if (!initialLoadDone || supabaseStatus === 'table-missing') return;
+
+    const timer = setTimeout(() => {
+      saveToSupabase();
+    }, 2000); // 2 second delay to bundle changes
+
+    return () => clearTimeout(timer);
+  }, [tasks, notes, escalaTexto, pendencias, initialLoadDone, supabaseStatus]);
+
   const menuItems: { id: Tab, icon: React.ElementType, label: string }[] = [
     { id: 'Dashboard', icon: LayoutDashboard, label: 'Painel Inicial' },
     { id: 'Setores', icon: Layers, label: 'Sub-setores' },
@@ -1279,127 +1332,66 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
           ))}
         </nav>
 
-        {/* Supabase status inside Sidebar */}
-        <div className="px-5 mb-4 mt-auto">
-          <div className="p-4 bg-white/70 border border-gray-200/60 rounded-2xl text-xs space-y-3 shadow-sm">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-[#1A1A1A] flex items-center gap-1">
-                <Database className="w-3.5 h-3.5 text-[#A855F7]" /> Supabase Sync
-              </span>
-              <span className={cn(
-                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold",
-                supabaseStatus === 'connected' && "bg-emerald-100 text-emerald-800",
-                supabaseStatus === 'checking' && "bg-amber-100 text-amber-800",
-                supabaseStatus === 'table-missing' && "bg-rose-100 text-rose-800",
-                supabaseStatus === 'error' && "bg-amber-100/50 text-amber-800"
-              )}>
-                <span className={cn(
-                  "w-1.5 h-1.5 rounded-full animate-pulse",
-                  supabaseStatus === 'connected' && "bg-emerald-500",
-                  supabaseStatus === 'checking' && "bg-amber-500",
-                  supabaseStatus === 'table-missing' && "bg-rose-500",
-                  supabaseStatus === 'error' && "bg-amber-500"
-                )} />
-                {supabaseStatus === 'connected' && 'Online'}
-                {supabaseStatus === 'checking' && 'Buscando...'}
-                {supabaseStatus === 'table-missing' && 'Falta Tabela'}
-                {supabaseStatus === 'error' && 'Sem Conexão'}
-              </span>
-            </div>
-
-            {supabaseStatus === 'table-missing' && (
-              <p className="text-gray-500 leading-normal font-medium text-[10px]">
-                Tabela <code className="font-mono bg-red-50 text-rose-600 px-1 rounded">plantao_cme</code> ausente. Clique em <strong className="text-[#A855F7] cursor-pointer underline" onClick={() => setShowSqlModal(true)}>SQL</strong> para copiar o script de criação.
-              </p>
-            )}
-
-            {supabaseStatus === 'connected' && (
-              <div className="text-[10px] font-medium text-gray-500">
-                {lastSaved ? `Salvo às: ${lastSaved}` : 'Dados estão sincronizados.'}
-              </div>
-            )}
-
-            {supabaseStatus === 'error' && (
-              <div className="space-y-1.5">
-                <p className="text-gray-500 leading-normal font-medium text-[10px]">
-                  Erro de sincronização ou credenciais.
-                </p>
-                {supabaseErrorMsg && (
-                  <div className="text-[10px] bg-rose-50 border border-rose-150 text-rose-700 p-2 rounded-xl font-medium leading-relaxed max-h-32 overflow-y-auto break-words">
-                    {supabaseErrorMsg}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-1.5 pt-1">
-              <button 
-                onClick={() => setShowSqlModal(true)}
-                className="py-1.5 border border-gray-200 hover:border-[#A855F7]/30 hover:bg-[#F3E8FF]/30 text-gray-650 hover:text-[#A855F7] rounded-xl font-bold text-center flex items-center justify-center gap-1 transition-all text-[11px]"
-                title="Ver Script SQL"
-              >
-                <Code className="w-3.5 h-3.5" /> SQL Script
-              </button>
-              
-              <button 
-                onClick={saveToSupabase}
-                disabled={isSaving || supabaseStatus === 'checking' || supabaseStatus === 'table-missing'}
-                className={cn(
-                  "py-1.5 text-white font-bold rounded-xl text-center flex items-center justify-center gap-1 transition-all shadow-sm text-[11px]",
-                  (isSaving || supabaseStatus === 'checking' || supabaseStatus === 'table-missing')
-                    ? "bg-gray-300 cursor-not-allowed text-gray-500" 
-                    : "bg-[#A855F7] hover:bg-[#9333EA] active:scale-95 cursor-pointer"
-                )}
-              >
-                {isSaving ? (
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-3 h-3" />
-                )}
-                Sincronizar
-              </button>
-            </div>
-            
-            <button
-              onClick={() => setShowCredentialsModal(true)}
-              className="w-full text-center text-[10px] text-gray-400 hover:text-[#A855F7] hover:underline font-medium block mt-1"
-            >
-              Configurar Credenciais
-            </button>
-          </div>
-        </div>
-
-        {/* User Profile / Auth Status in Sidebar */}
-        <div className="px-5 mb-4">
+        {/* Compact Footer Profile & Settings in Sidebar */}
+        <div className="px-5 mb-6 mt-auto space-y-2.5">
           {currentUser ? (
-            <div className="p-3 bg-white border border-gray-200/80 rounded-2xl shadow-sm flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-[#A855F7]/10 flex items-center justify-center text-[#A855F7] font-bold uppercase text-xs border border-[#A855F7]/20 shrink-0 select-none">
-                {currentUser.email?.charAt(0) || "U"}
+            <div className="p-3 bg-white border border-gray-150 rounded-2xl flex items-center gap-2.5 shadow-[0_2px_12px_rgb(0,0,0,0.02)]">
+              <div className="w-7 h-7 rounded-full bg-[#A855F7]/10 flex items-center justify-center text-[#A855F7] font-bold uppercase text-[10px] border border-[#A855F7]/15 shrink-0 select-none">
+                {currentUser.user_metadata?.full_name?.charAt(0) || currentUser.email?.charAt(0) || "U"}
               </div>
               <div className="flex-grow min-w-0 pr-1 text-left">
-                <p className="text-[11px] font-bold text-[#1A1A1A] truncate" title={currentUser.email}>{currentUser.email}</p>
-                <p className="text-[10px] text-[#A855F7] font-bold uppercase tracking-wider">Profissional CME</p>
+                <p className="text-[10px] font-bold text-[#1A1A1A] truncate" title={currentUser.user_metadata?.full_name || currentUser.email}>
+                  {currentUser.user_metadata?.full_name || currentUser.email}
+                </p>
+                <div className="text-[8.5px] text-[#A855F7] font-bold uppercase tracking-wider truncate">
+                  {currentUser.user_metadata?.role || "Profissional CME"}
+                </div>
+                {currentUser.user_metadata?.hospital_name && (
+                  <p className="text-[8px] text-gray-400 truncate leading-tight mt-0.5">
+                    {currentUser.user_metadata.hospital_name}
+                  </p>
+                )}
+                <button 
+                  type="button"
+                  onClick={() => setShowCredentialsModal(true)}
+                  className="text-[9px] text-gray-500 hover:text-[#A855F7] hover:underline font-bold flex items-center gap-1 mt-1.5"
+                >
+                  <Database className="w-2.5 h-2.5 text-[#A855F7]" /> Ajustes Supabase
+                </button>
               </div>
               <button 
+                type="button"
                 onClick={handleSignOut}
-                className="p-1.5 hover:bg-rose-50 text-gray-400 hover:text-rose-500 rounded-lg transition-colors shrink-0"
+                className="p-1 text-gray-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
                 title="Sair da Conta"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5" />
               </button>
             </div>
           ) : (
             <button 
+              type="button"
               onClick={() => setShowCredentialsModal(true)}
-              className="w-full p-3 bg-gradient-to-r from-[#A855F7]/5 to-[#9333EA]/5 border border-[#A855F7]/20 hover:border-[#A855F7]/50 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold text-[#A855F7] hover:bg-[#F3E8FF]/20 transition-all shadow-sm cursor-pointer"
+              className="w-full py-2.5 px-3 bg-white border border-gray-150 hover:border-[#A855F7]/30 hover:bg-[#F3E8FF]/10 rounded-2xl flex items-center justify-center gap-1.5 text-[11px] font-bold text-gray-500 hover:text-[#A855F7] transition-all cursor-pointer shadow-[0_2px_8px_rgb(0,0,0,0.01)]"
             >
-              <Database className="w-3.5 h-3.5 text-[#A855F7]" /> Conectar ao Supabase
+              <Database className="w-3 h-3 text-gray-400" /> Banco de Dados
             </button>
           )}
+
+          <div className="flex items-center justify-between text-[10px] text-gray-400 px-1 font-semibold">
+            <span>v1.2.0</span>
+            <span className="flex items-center gap-1.5 uppercase tracking-wide text-[9px] text-gray-450">
+              <span className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                supabaseStatus === 'connected' ? "bg-emerald-500 animate-pulse" : "bg-gray-300"
+              )} />
+              Sincronia ativa
+            </span>
+          </div>
         </div>
 
-        <div className="p-6">
-          <button className="w-full flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-transparent border-2 border-gray-200 text-[#1A1A1A] hover:bg-white hover:border-[#A855F7]/30 transition-all font-semibold text-sm tracking-wide group">
+        <div className="p-5 border-t border-gray-150/50">
+          <button className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-transparent border-2 border-gray-200 text-[#1A1A1A] hover:bg-white hover:border-[#A855F7]/30 transition-all font-semibold text-sm tracking-wide group">
             <Plus className="w-4 h-4 text-gray-400 group-hover:text-[#A855F7]" strokeWidth={2.5} />
             Novo Registro
           </button>
@@ -1410,81 +1402,26 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
       <main className="flex-1 lg:ml-64 relative min-h-screen overflow-x-hidden">
         <div className="max-w-[1200px] mx-auto p-6 md:p-10 lg:p-12 w-full">
           {/* Top Bar for Mobile */}
-          <div className="lg:hidden flex flex-col gap-3.5 mb-8 bg-white p-4.5 rounded-2xl border border-gray-150/80 shadow-sm">
-            <div className="flex justify-between items-center">
-              <h1 className="font-serif text-2xl font-bold tracking-tight text-[#1A1A1A]">
-                minha<span className="text-[#A855F7] italic">cme</span>
-              </h1>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCredentialsModal(true)}
-                  className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-[#1A1A1A] rounded-xl text-xs font-bold border border-gray-200 flex items-center gap-1 transition-colors"
-                >
-                  <Database className="w-3.5 h-3.5 text-[#A855F7]" /> Supabase
-                </button>
-                <button className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center border border-gray-150">
-                  <Bell className="w-5 h-5 text-[#1A1A1A]" />
-                </button>
-              </div>
+          <div className="lg:hidden flex items-center justify-between mb-8 bg-white px-4.5 py-4 rounded-2xl border border-gray-150/80 shadow-sm">
+            <h1 className="font-serif text-2xl font-bold tracking-tight text-[#1A1A1A]">
+              minha<span className="text-[#A855F7] italic font-medium">cme</span>
+            </h1>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCredentialsModal(true)}
+                className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-gray-150 text-gray-550 hover:text-[#A855F7] hover:border-[#A855F7]/30 transition-colors"
+                title="Configurar Supabase"
+              >
+                <Database className="w-4 h-4" />
+              </button>
+              <button 
+                type="button"
+                className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-gray-150"
+              >
+                <Bell className="w-4.5 h-4.5 text-[#1A1A1A]" />
+              </button>
             </div>
-            
-            {/* Sync status row shown on mobile */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs border-t border-gray-100 pt-3">
-              <div className="flex items-center gap-1.5">
-                <span className={cn(
-                  "w-2 h-2 rounded-full animate-pulse",
-                  supabaseStatus === 'connected' && "bg-emerald-500",
-                  supabaseStatus === 'checking' && "bg-amber-500",
-                  supabaseStatus === 'table-missing' && "bg-rose-500",
-                  supabaseStatus === 'error' && "bg-amber-500"
-                )} />
-                <span className="font-semibold text-gray-500">
-                  {supabaseStatus === 'connected' && (lastSaved ? `Sincronizado: ${lastSaved}` : 'Dados Sincronizados')}
-                  {supabaseStatus === 'checking' && 'Buscando conexão...'}
-                  {supabaseStatus === 'table-missing' && 'Falta tabela plantao_cme'}
-                  {supabaseStatus === 'error' && 'Conexão offline/erro'}
-                </span>
-              </div>
-              
-              <div className="flex gap-2 items-center">
-                {supabaseStatus === 'table-missing' && (
-                  <button 
-                    type="button"
-                    onClick={() => setShowSqlModal(true)}
-                    className="text-[11px] text-[#A855F7] hover:underline font-bold px-1 py-0.5"
-                  >
-                    Ver SQL
-                  </button>
-                )}
-                <button 
-                  type="button"
-                  onClick={saveToSupabase}
-                  disabled={isSaving || supabaseStatus === 'checking' || supabaseStatus === 'table-missing'}
-                  className={cn(
-                    "px-3 py-1.5 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1",
-                    (isSaving || supabaseStatus === 'checking' || supabaseStatus === 'table-missing')
-                      ? "bg-gray-200 text-gray-400 cursor-not-allowed" 
-                      : "bg-[#A855F7] hover:bg-[#9333EA] active:scale-95 shadow-sm cursor-pointer"
-                  )}
-                >
-                  {isSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                  Sincronizar
-                </button>
-              </div>
-            </div>
-            
-            {supabaseStatus === 'table-missing' && (
-              <p className="text-[10px] text-rose-600 font-medium leading-relaxed bg-rose-50/50 p-2 rounded-lg border border-rose-100/30">
-                A tabela do banco de dados não existe. Toque em <strong>Ver SQL</strong> acima, copie o código e execute no editor SQL do Supabase.
-              </p>
-            )}
-
-            {supabaseStatus === 'error' && supabaseErrorMsg && (
-              <div className="text-[10px] text-rose-600 font-medium leading-relaxed bg-rose-50/50 p-2.5 rounded-lg border border-rose-150 break-words">
-                <strong>Erro de sincronização:</strong> {supabaseErrorMsg}
-              </div>
-            )}
           </div>
           
           <AnimatePresence mode="wait">
@@ -1684,11 +1621,80 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
                   </div>
                 </div>
 
-                <div className="p-4 bg-[#F3E8FF]/30 border border-[#A855F7]/15 rounded-2xl flex items-start gap-2.5">
-                  <Database className="w-5 h-5 text-[#A855F7] shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-gray-600 leading-normal font-medium">
-                    Todas as informações salvas no seu Supabase serão sincronizadas instantaneamente, permitindo que você acompanhe o painel de qualquer dispositivo!
-                  </p>
+                {/* Status & Diagnostic Details inside Modal */}
+                <div className="p-4 rounded-2xl bg-gray-50 border border-gray-150 space-y-3.5">
+                  <div className="flex items-center justify-between border-b border-gray-200/80 pb-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-450 block">Status da Conexão</span>
+                    <span className={cn(
+                      "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold",
+                      supabaseStatus === 'connected' && "bg-emerald-50 text-emerald-800 border border-emerald-150",
+                      supabaseStatus === 'checking' && "bg-amber-50 text-amber-800 border border-amber-150",
+                      supabaseStatus === 'table-missing' && "bg-rose-50 text-rose-800 border border-rose-150",
+                      supabaseStatus === 'error' && "bg-amber-50/50 text-amber-800 border border-amber-150",
+                      supabaseStatus === 'idle' && "bg-gray-50 text-gray-650 border border-gray-200"
+                    )}>
+                      <span className={cn(
+                        "w-1.5 h-1.5 rounded-full",
+                        supabaseStatus === 'connected' && "bg-emerald-500 animate-pulse",
+                        supabaseStatus === 'checking' && "bg-amber-400 animate-pulse",
+                        supabaseStatus === 'table-missing' && "bg-rose-500 animate-pulse",
+                        supabaseStatus === 'error' && "bg-amber-400",
+                        supabaseStatus === 'idle' && "bg-gray-400"
+                      )} />
+                      {supabaseStatus === 'connected' && 'Online / Sincronizado'}
+                      {supabaseStatus === 'checking' && 'Buscando...'}
+                      {supabaseStatus === 'table-missing' && 'Falta Tabela plantao_cme'}
+                      {supabaseStatus === 'error' && 'Problema na Rede/Chaves'}
+                      {supabaseStatus === 'idle' && 'Aguardando'}
+                    </span>
+                  </div>
+
+                  {lastSaved && (
+                    <p className="text-[11px] text-gray-500 font-semibold text-left">
+                      Última sincronia ativa: <strong className="text-[#1A1A1A] font-bold">{lastSaved}</strong>
+                    </p>
+                  )}
+
+                  {supabaseStatus === 'table-missing' && (
+                    <div className="bg-rose-50 border border-rose-100/50 p-3 rounded-xl space-y-1 text-left">
+                      <p className="text-[11px] text-rose-800 font-bold leading-none">Script Necessário</p>
+                      <p className="text-[10px] text-rose-700 font-semibold leading-normal">
+                        Sua conexão do Supabase funcionou de forma excelente, mas a tabela <code className="font-mono bg-white px-1 py-0.5 border border-rose-150 rounded text-rose-600">plantao_cme</code> precisa ser inicializada. Clique em <strong>Ver SQL Script</strong> abaixo para copiá-la.
+                      </p>
+                    </div>
+                  )}
+
+                  {supabaseStatus === 'error' && supabaseErrorMsg && (
+                    <div className="bg-rose-50 border border-rose-100/50 p-2.5 rounded-xl max-h-32 overflow-y-auto text-left">
+                      <p className="text-[11px] text-rose-800 font-bold mb-1 leading-none">Log do Erro:</p>
+                      <p className="text-[9.5px] text-rose-700 font-semibold font-mono leading-relaxed break-all whitespace-pre-wrap">{supabaseErrorMsg}</p>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2.5">
+                    <button 
+                      type="button"
+                      onClick={() => { setShowSqlModal(true); }}
+                      className="px-3 py-2 bg-white border border-gray-250 hover:border-[#A855F7]/30 hover:bg-[#F3E8FF]/10 text-gray-600 hover:text-[#A855F7] rounded-xl font-bold flex items-center justify-center gap-1 transition-all text-xs flex-1 shadow-sm select-none cursor-pointer"
+                    >
+                      <Code className="w-3.5 h-3.5 text-[#A855F7]" /> Ver SQL Script
+                    </button>
+                    
+                    <button 
+                      type="button"
+                      onClick={saveToSupabase}
+                      disabled={isSaving || supabaseStatus === 'checking' || supabaseStatus === 'table-missing'}
+                      className={cn(
+                        "px-3 py-2 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all flex-1 shadow-sm select-none",
+                        (isSaving || supabaseStatus === 'checking' || supabaseStatus === 'table-missing')
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200" 
+                          : "bg-[#A855F7] hover:bg-[#9333EA] active:scale-95 cursor-pointer shadow-purple-200 hover:shadow-md"
+                      )}
+                    >
+                      {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      Sincronizar Agora
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1993,32 +1999,115 @@ function InsightsView({
           <p className="text-xs text-gray-500 max-w-md mx-auto font-medium leading-relaxed">
             Tenha acesso a relatórios integrados, análise de tendências operacionais, identificação automática de gargalos biológicos e conformações recomendadas de RDC 15.
           </p>
+          
+          <div className="flex items-center justify-center gap-2 mt-2">
+            <span className={cn(
+              "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border",
+              supabaseStatus === 'connected' ? "bg-emerald-50 text-emerald-800 border-emerald-150" : "bg-gray-50 text-gray-500 border-gray-200"
+            )}>
+              <span className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                supabaseStatus === 'connected' ? "bg-emerald-500 animate-pulse" : "bg-gray-400"
+              )} />
+              Banco Supabase: {supabaseStatus === 'connected' ? 'Sincronizado / Online' : 'Parâmetros Locais'}
+            </span>
+          </div>
         </div>
 
-        <Card className="shadow-2xl border border-gray-150 p-6 md:p-8">
-          {/* Auth mode selector tabs */}
-          <div className="flex border-b border-gray-100 mb-6">
-            <button
-              onClick={() => { setAuthMode('login'); setAuthError(null); setAuthSuccessMsg(null); }}
-              className={cn(
-                "flex-1 pb-4 text-sm font-bold border-b-2 tracking-wider transition-all",
-                authMode === 'login' ? "border-[#A855F7] text-[#A855F7]" : "border-transparent text-gray-400"
-              )}
-            >
-              Fazer Login
-            </button>
-            <button
-              onClick={() => { setAuthMode('signup'); setAuthError(null); setAuthSuccessMsg(null); }}
-              className={cn(
-                "flex-1 pb-4 text-sm font-bold border-b-2 tracking-wider transition-all",
-                authMode === 'signup' ? "border-[#A855F7] text-[#A855F7]" : "border-transparent text-gray-400"
-              )}
-            >
-              Criar Conta Grátis
-            </button>
-          </div>
+        <Card className="shadow-2xl border border-gray-150 p-6 md:p-8 space-y-6">
+          {authMode === 'forgot' ? (
+            <div className="flex border-b border-gray-100 mb-2 pb-2">
+              <button
+                type="button"
+                onClick={() => { setAuthMode('login'); setAuthError(null); setAuthSuccessMsg(null); }}
+                className="text-xs font-extrabold text-[#A855F7] hover:underline flex items-center gap-1 select-none"
+              >
+                ← Voltar para o Login
+              </button>
+            </div>
+          ) : (
+            /* Auth mode selector tabs */
+            <div className="flex border-b border-gray-100 mb-2">
+              <button
+                type="button"
+                onClick={() => { setAuthMode('login'); setAuthError(null); setAuthSuccessMsg(null); }}
+                className={cn(
+                  "flex-1 pb-4 text-sm font-bold border-b-2 tracking-wider transition-all",
+                  authMode === 'login' ? "border-[#A855F7] text-[#A855F7]" : "border-transparent text-gray-400"
+                )}
+              >
+                Fazer Login
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMode('signup'); setAuthError(null); setAuthSuccessMsg(null); }}
+                className={cn(
+                  "flex-1 pb-4 text-sm font-bold border-b-2 tracking-wider transition-all",
+                  authMode === 'signup' ? "border-[#A855F7] text-[#A855F7]" : "border-transparent text-gray-400"
+                )}
+              >
+                Criar Conta Grátis
+              </button>
+            </div>
+          )}
 
           <form onSubmit={handleAuthSubmit} className="space-y-4">
+            
+            {authMode === 'signup' && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2 text-left">
+                    <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
+                      <User className="w-3.5 h-3.5 text-[#A855F7]" /> Nome Completo
+                    </label>
+                    <input 
+                      type="text" 
+                      placeholder="Amanda Maciel" 
+                      required
+                      value={authFullName}
+                      onChange={(e) => setAuthFullName(e.target.value)}
+                      disabled={isAuthLoading}
+                      className="w-full px-4 py-3 bg-[#FAF9F7] border border-gray-200 rounded-2xl text-sm focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-2 text-left">
+                    <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
+                      <Hospital className="w-3.5 h-3.5 text-[#A855F7]" /> Hospital / Instituição
+                    </label>
+                    <input 
+                      type="text" 
+                      placeholder="Hospital Regional" 
+                      required
+                      value={authHospitalName}
+                      onChange={(e) => setAuthHospitalName(e.target.value)}
+                      disabled={isAuthLoading}
+                      className="w-full px-4 py-3 bg-[#FAF9F7] border border-gray-200 rounded-2xl text-sm focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2 text-left">
+                  <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
+                    <Users className="w-3.5 h-3.5 text-[#A855F7]" /> Cargo / Função CME
+                  </label>
+                  <select
+                    value={authRole}
+                    onChange={(e) => setAuthRole(e.target.value)}
+                    disabled={isAuthLoading}
+                    className="w-full px-4 py-3 bg-[#FAF9F7] border border-gray-200 rounded-2xl text-sm focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium transition-colors outline-none cursor-pointer"
+                  >
+                    <option value="Enfermeiro(a) Chefe">Enfermeiro(a) Chefe</option>
+                    <option value="Técnico CME">Técnico CME</option>
+                    <option value="Auxiliar CME">Auxiliar CME</option>
+                    <option value="Supervisor(a) CME">Supervisor(a) CME</option>
+                    <option value="Engenharia Clínica">Engenharia Clínica</option>
+                    <option value="Gerente Operacional">Gerente Operacional</option>
+                  </select>
+                </div>
+              </>
+            )}
+
             <div className="space-y-2 text-left">
               <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
                 <Mail className="w-3.5 h-3.5" /> E-mail Profissional
@@ -2034,31 +2123,85 @@ function InsightsView({
               />
             </div>
 
-            <div className="space-y-2 text-left">
-              <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
-                <Key className="w-3.5 h-3.5" /> Senha Segura
-              </label>
-              <input 
-                type="password" 
-                placeholder="••••••" 
-                required
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                disabled={isAuthLoading}
-                className="w-full px-4 py-3 bg-[#FAF9F7] border border-gray-200 rounded-2xl text-sm focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium transition-colors"
-                minLength={6}
-              />
-            </div>
+            {authMode !== 'forgot' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2 text-left">
+                  <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
+                    <Key className="w-3.5 h-3.5" /> Senha Segura
+                  </label>
+                  <div className="relative">
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      placeholder="••••••" 
+                      required
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      disabled={isAuthLoading}
+                      className="w-full pl-4 pr-14 py-3 bg-[#FAF9F7] border border-gray-200 rounded-2xl text-sm focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium transition-colors"
+                      minLength={6}
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] font-extrabold text-gray-400 hover:text-[#A855F7] select-none uppercase tracking-wider"
+                    >
+                      {showPassword ? "Ocultar" : "Mostrar"}
+                    </button>
+                  </div>
+                </div>
+
+                {authMode === 'signup' && (
+                  <div className="space-y-2 text-left">
+                    <label className="text-[10px] font-bold tracking-wider text-gray-400 uppercase flex items-center gap-1.5 leading-none">
+                      <Key className="w-3.5 h-3.5" /> Confirmar Senha
+                    </label>
+                    <div className="relative">
+                      <input 
+                        type={showPassword ? "text" : "password"} 
+                        placeholder="••••••" 
+                        required
+                        value={authConfirmPassword}
+                        onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                        disabled={isAuthLoading}
+                        className="w-full pl-4 pr-14 py-3 bg-[#FAF9F7] border border-gray-200 rounded-2xl text-sm focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium transition-colors"
+                        minLength={6}
+                      />
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] font-extrabold text-gray-400 hover:text-[#A855F7] select-none uppercase tracking-wider"
+                      >
+                        {showPassword ? "Ocultar" : "Mostrar"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {authMode === 'login' && (
+              <div className="text-right">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('forgot'); setAuthError(null); setAuthSuccessMsg(null); }}
+                  className="text-xs font-bold text-[#A855F7] hover:underline"
+                >
+                  Esqueceu sua senha?
+                </button>
+              </div>
+            )}
 
             {authError && (
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 leading-relaxed font-semibold text-left flex items-start gap-2">
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 leading-relaxed font-semibold text-left flex items-start gap-2 animate-fadeIn">
                 <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                 <span>{authError}</span>
               </div>
             )}
 
             {authSuccessMsg && (
-              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 leading-relaxed font-semibold text-left flex items-start gap-2">
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 leading-relaxed font-semibold text-left flex items-start gap-2 animate-fadeIn">
                 <Check className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
                 <span>{authSuccessMsg}</span>
               </div>
@@ -2067,7 +2210,7 @@ function InsightsView({
             <button
               type="submit"
               disabled={isAuthLoading}
-              className="w-full py-4.5 bg-gradient-to-r from-[#A855F7] to-[#9333EA] hover:opacity-95 text-white font-bold rounded-2xl transition-all shadow-xl shadow-purple-200 flex items-center justify-center gap-2 hover:translate-y-[-1px] active:translate-y-[1px] cursor-pointer"
+              className="w-full py-4 bg-gradient-to-r from-[#A855F7] to-[#9333EA] hover:opacity-95 text-white font-bold rounded-2xl transition-all shadow-xl shadow-purple-200 flex items-center justify-center gap-2 hover:translate-y-[-1px] active:translate-y-[1px] cursor-pointer"
             >
               {isAuthLoading ? (
                 <>
@@ -2077,11 +2220,93 @@ function InsightsView({
               ) : (
                 <>
                   <Lock className="w-4 h-4" />
-                  {authMode === 'login' ? "Entrar na Minha CME" : "Registrar Minha Conta"}
+                  {authMode === 'login' && "Entrar na Minha CME"}
+                  {authMode === 'signup' && "Registrar Minha Conta"}
+                  {authMode === 'forgot' && "Redefinir Senha"}
                 </>
               )}
             </button>
           </form>
+
+          {/* Database Keys settings fold in Lock Screen */}
+          <div className="pt-4 border-t border-gray-150 flex flex-col items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowDBConfigInLock(!showDBConfigInLock)}
+              className="text-[11px] text-gray-500 hover:text-[#A855F7] font-bold flex items-center gap-1.5 bg-gray-50 hover:bg-gray-100/80 px-3.5 py-1.5 rounded-xl border border-gray-200 transition-colors select-none cursor-pointer"
+            >
+              <Database className="w-3.5 h-3.5 text-[#A855F7]" />
+              {showDBConfigInLock ? "Ocultar Ajustes do Supabase" : "Conectar meu próprio Banco Supabase (Opcional)"}
+            </button>
+
+            {showDBConfigInLock && (
+              <div className="w-full bg-gray-50 border border-gray-200 p-4.5 rounded-2xl space-y-4 animate-fadeIn text-left">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-[#A855F7]" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Parâmetros de Conexão</span>
+                </div>
+                <div className="space-y-3.5">
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-extrabold tracking-wider text-gray-400 uppercase">Supabase Project URL ou ID</label>
+                    <input
+                      type="text"
+                      placeholder="https://xyz.supabase.co ou project-ref"
+                      value={supabaseUrlInput}
+                      onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                      className="w-full px-3/5 py-2.5 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-extrabold tracking-wider text-gray-400 uppercase">Supabase Anon / Public Key</label>
+                    <input
+                      type="password"
+                      placeholder="eyJhbGciOi..."
+                      value={supabaseKeyInput}
+                      onChange={(e) => setSupabaseKeyInput(e.target.value)}
+                      className="w-full px-3/5 py-2.5 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-[#A855F7] text-[#1A1A1A] font-medium"
+                    />
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        saveSupabaseCredentials(supabaseUrlInput, supabaseKeyInput);
+                        setAuthSuccessMsg("Chaves salvas! Sincronizando banco de dados local...");
+                        setTimeout(() => {
+                          checkConnectionAndLoad(true);
+                          setupAuthListener();
+                        }, 100);
+                      }}
+                      className="px-4 py-2 bg-[#A855F7] hover:bg-[#9333EA] text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-1 flex-1 cursor-pointer"
+                    >
+                      Salvar e Testar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        saveSupabaseCredentials('', '');
+                        setSupabaseUrlInput('');
+                        setSupabaseKeyInput('');
+                        setAuthSuccessMsg("Configurações originais restauradas!");
+                        setTimeout(() => {
+                          checkConnectionAndLoad(true);
+                          setupAuthListener();
+                        }, 100);
+                      }}
+                      className="px-3 py-2 bg-white border border-gray-250 text-gray-500 hover:text-rose-500 rounded-xl text-xs font-bold transition-all hover:bg-rose-50 hover:border-rose-100"
+                    >
+                      Limpar
+                    </button>
+                  </div>
+
+                  <p className="text-[10px] text-gray-400 font-medium leading-normal">
+                    *Após salvar, as operações de cadastro, login e gravação serão enviadas diretamente ao seu próprio projeto hospedado no Supabase de forma totalmente segura.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
         </Card>
 
         {/* Security / HIPAA compliance note */}
@@ -2279,7 +2504,7 @@ function InsightsView({
 
                   {currentUser && (
                     <p className="mt-8 text-[11px] text-gray-450 text-center font-bold font-mono tracking-widest uppercase py-4 border-t border-gray-150/50 print:block">
-                      Emissor: {currentUser.email} • Sistema Minha CME IA • {new Date().toLocaleDateString()}
+                      Emissor: {currentUser.user_metadata?.full_name || currentUser.email} {currentUser.user_metadata?.role ? `(${currentUser.user_metadata.role})` : ''} • Sistema Minha CME IA • {new Date().toLocaleDateString()}
                     </p>
                   )}
                 </div>
