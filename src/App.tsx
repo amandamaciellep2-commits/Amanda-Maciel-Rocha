@@ -38,7 +38,6 @@ import {
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { GoogleGenAI } from '@google/genai';
 import {
   getSupabaseClient,
   getSupabaseCredentials,
@@ -692,13 +691,20 @@ function AnotacoesView() {
 
 // -- MAIN LAYOUT -- //
 
-type Tab = 'Dashboard' | 'Setores' | 'OPME';
+type Tab = 'Dashboard' | 'Setores' | 'OPME' | 'Insights';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('Dashboard');
+  const [activeTab, setActiveTab] = useState<Tab>('Insights');
 
   // Supabase Auth and User States
   const [currentUser, setCurrentUser] = useState<any>(null);
+  
+  // Auto-redirect to dashboard when logged in if currently on Insights (login screen)
+  useEffect(() => {
+    if (currentUser && activeTab === 'Insights') {
+      setActiveTab('Dashboard');
+    }
+  }, [currentUser]);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'forgot'>('login');
@@ -1146,6 +1152,7 @@ export default function App() {
           email: authEmail.trim(),
           password: authPassword,
           options: {
+            emailRedirectTo: window.location.origin,
             data: {
               full_name: authFullName.trim(),
               hospital_name: authHospitalName.trim(),
@@ -1156,7 +1163,7 @@ export default function App() {
         if (error) throw error;
 
         if (data.user && !data.session) {
-          setAuthSuccessMsg("Cadastro feito com sucesso! Confirme em seu e-mail (ou faça login se a confirmação estiver desativa).");
+          setAuthSuccessMsg("Cadastro feito com sucesso! Verifique seu e-mail para confirmar. (Nota: Se o link no e-mail apontar para 'localhost', você deve configurar o 'Site URL' no Supabase Dashboard ou desativar 'Confirm email' nas configurações de Auth para testes).");
         } else if (data.session) {
           setCurrentUser(data.user);
           setAuthSuccessMsg("Registrado e conectado com sucesso!");
@@ -1197,6 +1204,7 @@ export default function App() {
       setCurrentUser(null);
       setAiInsight('');
       setAuthSuccessMsg("Conexão encerrada com sucesso.");
+      setActiveTab('Insights');
     }
   };
 
@@ -1208,56 +1216,35 @@ export default function App() {
     setAiError(null);
 
     try {
-      const apiKey = typeof process !== 'undefined' ? (process.env as any).GEMINI_API_KEY : '';
-      if (!apiKey) {
-        throw new Error("A chave GEMINI_API_KEY do servidor não está configurada nessa sessão.");
-      }
+      const client = getSupabaseClient();
+      const { data: { session } } = await client.auth.getSession();
       
-      const ai = new GoogleGenAI({ apiKey });
-
-      const activeTasksStr = tasks.map(t => `- [${t.checked ? 'X' : ' '}] ${t.title} (${t.metadata})`).join('\n');
-      const pendenciasStr = pendencias.map(p => `- [${p.checked ? 'X' : ' '}] ${p.label}`).join('\n');
-
-      const prompt = `Você é um Analista de IA Especialista em CME (Central de Material e Esterilização).
-Análise de forma rigorosa os detalhes do plantão de hoje descritos abaixo e prepare um relatório executivo de alta densidade técnica em português brasileiro. Use um tom clínico, focado em governança, biossegurança, otimização de ciclos e conformidade regulatória (Anvisa RDC 15).
-
-DADOS DO PLANTÃO CME DE HOJE:
-- Notas / Ocorrências registradas: "${notes || "Nenhuma ocorrência registrada no sistema até o momento."}"
-- Checklists de Atividades do Dia:
-${activeTasksStr}
-- Pendências Administrativas Registradas:
-${pendenciasStr || "Nenhuma pendência cadastrada."}
-- Capacidade Básica de Operações:
-  - Kits de OPME recebidos/processados: 4
-  - Ópticas e endoscópios cirúrgicos conferidos: 10
-  - Alertas críticos pendentes: 1
-
-INSTRUÇÕES DO RELATÓRIO (ESCREVA EM MARKDOWN LIMPO E COMPACTO):
-1. Use as seguintes divisões exatas em seu texto:
-   - ### 📊 Resumo Executivo e Status Geral
-     (Descreva o progresso do turno, grau de prontidão e resumo clínico do fluxo operacional.)
-   - ### ⚠️ Gestão de Riscos e Gargalos
-     (Identifique riscos potenciais de contaminação cruzada, atrasos em cirurgias, ou descumprimento legal devido a tarefas pendentes ou falhas descritas nas notas.)
-   - ### 💡 Recomendações e Boas Práticas (RDC 15)
-     (Prescreva recomendações baseadas no manual de boas práticas de processamento de produtos de saúde e biossegurança hospitalar.)
-   - ### 📋 Plano de Intervenção de 3 Passos
-     1. Passo 1 de alta prioridade...
-     2. Passo 2 de média prioridade...
-     3. Passo 3 de rotina de enceramento...
-     
-Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Forneça valor real para enfermeiros chefes e supervisores cirúrgicos.`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
+      const response = await fetch('/api/generate-insights', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          tasks,
+          notes,
+          pendencias
+        })
       });
 
-      if (response.text) {
-        setAiInsight(response.text);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Falha técnica ao falar com a API do servidor.");
+      }
+
+      const result = await response.json();
+
+      if (result.text) {
+        setAiInsight(result.text);
         // Save the insight instantly to Supabase
-        await saveWithAiInsight(response.text);
+        await saveWithAiInsight(result.text);
       } else {
-        throw new Error("O modelo Gemini retornou uma resposta sem texto.");
+        throw new Error("O servidor retornou uma resposta sem texto.");
       }
     } catch (err: any) {
       console.error("AI Generation Error:", err);
@@ -1297,10 +1284,13 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
     return () => clearTimeout(timer);
   }, [tasks, notes, escalaTexto, pendencias, initialLoadDone, supabaseStatus]);
 
-  const menuItems: { id: Tab, icon: React.ElementType, label: string }[] = [
+  const menuItems: { id: Tab, icon: React.ElementType, label: string }[] = currentUser ? [
     { id: 'Dashboard', icon: LayoutDashboard, label: 'Painel Inicial' },
     { id: 'Setores', icon: Layers, label: 'Sub-setores' },
     { id: 'OPME', icon: Package, label: 'Área OPME' },
+    { id: 'Insights', icon: Sparkles, label: 'IA Insights' },
+  ] : [
+    { id: 'Insights', icon: Sparkles, label: 'Entrar no Sistema' },
   ];
 
   return (
@@ -1442,6 +1432,53 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
             )}
             {activeTab === 'Setores' && <SetoresView key="setores" />}
             {activeTab === 'OPME' && <OPMEView key="opme" />}
+            {activeTab === 'Insights' && (
+              <InsightsView 
+                key="insights"
+                currentUser={currentUser}
+                authEmail={authEmail}
+                setAuthEmail={setAuthEmail}
+                authPassword={authPassword}
+                setAuthPassword={setAuthPassword}
+                authMode={authMode}
+                setAuthMode={setAuthMode}
+                isAuthLoading={isAuthLoading}
+                authError={authError}
+                authSuccessMsg={authSuccessMsg}
+                setAuthError={setAuthError}
+                setAuthSuccessMsg={setAuthSuccessMsg}
+                handleAuthSubmit={handleAuthSubmit}
+                handleSignOut={handleSignOut}
+                aiInsight={aiInsight}
+                isGenerating={isGenerating}
+                aiError={aiError}
+                generateIAInsights={generateIAInsights}
+                setAiInsight={setAiInsight}
+                notes={notes}
+                tasks={tasks}
+                links={pendencias}
+                saveToSupabase={saveToSupabase}
+                authFullName={authFullName}
+                setAuthFullName={setAuthFullName}
+                authHospitalName={authHospitalName}
+                setAuthHospitalName={setAuthHospitalName}
+                authRole={authRole}
+                setAuthRole={setAuthRole}
+                authConfirmPassword={authConfirmPassword}
+                setAuthConfirmPassword={setAuthConfirmPassword}
+                showPassword={showPassword}
+                setShowPassword={setShowPassword}
+                showDBConfigInLock={showDBConfigInLock}
+                setShowDBConfigInLock={setShowDBConfigInLock}
+                supabaseStatus={supabaseStatus}
+                supabaseUrlInput={supabaseUrlInput}
+                setSupabaseUrlInput={setSupabaseUrlInput}
+                supabaseKeyInput={supabaseKeyInput}
+                setSupabaseKeyInput={setSupabaseKeyInput}
+                checkConnectionAndLoad={checkConnectionAndLoad}
+                setupAuthListener={setupAuthListener}
+              />
+            )}
           </AnimatePresence>
         </div>
       </main>
@@ -1451,7 +1488,9 @@ Seja prático e cirúrgico na sua linguagem. Evite explicações redundantes. Fo
         {menuItems.map(item => {
           const shortLabel = 
             item.id === 'Dashboard' ? 'Painel' : 
-            item.id === 'Setores' ? 'Setores' : 'OPME';
+            item.id === 'Setores' ? 'Setores' : 
+            item.id === 'OPME' ? 'OPME' : 
+            (currentUser ? 'Insights' : 'Acesso');
             
           return (
             <button 
@@ -1769,8 +1808,8 @@ interface InsightsViewProps {
   setAuthEmail: (email: string) => void;
   authPassword: string;
   setAuthPassword: (password: string) => void;
-  authMode: 'login' | 'signup';
-  setAuthMode: (mode: 'login' | 'signup') => void;
+  authMode: 'login' | 'signup' | 'forgot';
+  setAuthMode: (mode: 'login' | 'signup' | 'forgot') => void;
   isAuthLoading: boolean;
   authError: string | null;
   authSuccessMsg: string | null;
@@ -1787,6 +1826,25 @@ interface InsightsViewProps {
   tasks: any[];
   links: any[];
   saveToSupabase: () => void;
+  authFullName: string;
+  setAuthFullName: (v: string) => void;
+  authHospitalName: string;
+  setAuthHospitalName: (v: string) => void;
+  authRole: string;
+  setAuthRole: (v: string) => void;
+  authConfirmPassword: string;
+  setAuthConfirmPassword: (v: string) => void;
+  showPassword: boolean;
+  setShowPassword: (v: boolean) => void;
+  showDBConfigInLock: boolean;
+  setShowDBConfigInLock: (v: boolean) => void;
+  supabaseStatus: string;
+  supabaseUrlInput: string;
+  setSupabaseUrlInput: (v: string) => void;
+  supabaseKeyInput: string;
+  setSupabaseKeyInput: (v: string) => void;
+  checkConnectionAndLoad: (force?: boolean) => void;
+  setupAuthListener: () => void;
 }
 
 function InsightsView({
@@ -1812,7 +1870,26 @@ function InsightsView({
   notes,
   tasks,
   links,
-  saveToSupabase
+  saveToSupabase,
+  authFullName,
+  setAuthFullName,
+  authHospitalName,
+  setAuthHospitalName,
+  authRole,
+  setAuthRole,
+  authConfirmPassword,
+  setAuthConfirmPassword,
+  showPassword,
+  setShowPassword,
+  showDBConfigInLock,
+  setShowDBConfigInLock,
+  supabaseStatus,
+  supabaseUrlInput,
+  setSupabaseUrlInput,
+  supabaseKeyInput,
+  setSupabaseKeyInput,
+  checkConnectionAndLoad,
+  setupAuthListener
 }: InsightsViewProps) {
   const [copied, setCopied] = useState(false);
   const [loaderMessageIndex, setLoaderMessageIndex] = useState(0);
